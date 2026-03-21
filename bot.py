@@ -138,29 +138,31 @@ async def cmd_start(msg: types.Message, state: FSMContext):
                         reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
         return
 
-    bal   = d["users"][uid].get("balance", 0)
-    logo  = d["settings"].get("logo_file_id")
-    text  = (
+    bal  = d["users"][uid].get("balance", 0)
+    logo = d["settings"].get("logo_file_id")
+
+    # Inline tugmalar
+    btns = []
+    if WEB_URL and WEB_URL.startswith("https://"):
+        btns.append([InlineKeyboardButton(
+            text="🛍 Gift Market ni ochish",
+            web_app=WebAppInfo(url=WEB_URL)
+        )])
+    row = []
+    channel = d["settings"].get("channel_link", "")
+    support = d["settings"].get("support_link", "")
+    if channel: row.append(InlineKeyboardButton(text="📢 Kanal", url=channel))
+    if support: row.append(InlineKeyboardButton(text="💬 Support", url=support))
+    if row: btns.append(row)
+
+    text = (
         f"👋 <b>Salom, {msg.from_user.first_name}!</b>\n\n"
         f"⭐ <b>U-Gift Market</b>\n\n"
         f"💰 Balans: <b>{fmt(bal)} so'm</b>\n\n"
         f"👇 <b>Gift Market</b> tugmasini bosing:"
     )
 
-    # Inline tugmalar
-    btns = [[InlineKeyboardButton(
-        text="🛍 Gift Market ni ochish",
-        web_app=WebAppInfo(url=WEB_URL) if WEB_URL.startswith("https://") else None,
-        url=WEB_URL if not WEB_URL.startswith("https://") else None
-    )]]
-    channel = d["settings"].get("channel_link", "")
-    support = d["settings"].get("support_link", "")
-    row = []
-    if channel: row.append(InlineKeyboardButton(text="📢 Kanal", url=channel))
-    if support: row.append(InlineKeyboardButton(text="💬 Support", url=support))
-    if row: btns.append(row)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=btns)
+    kb = InlineKeyboardMarkup(inline_keyboard=btns) if btns else None
 
     if logo:
         await msg.answer_photo(logo, caption=text, parse_mode="HTML", reply_markup=kb)
@@ -204,10 +206,14 @@ async def on_webapp(msg: types.Message):
 
         if not username:
             await msg.answer("❌ Username kiritilmagan!"); return
+
         if bal < price:
             await msg.answer(
-                f"❌ <b>Balans yetarli emas!</b>\n\nKerak: <b>{fmt(price)} so'm</b>\nSizda: <b>{fmt(bal)} so'm</b>",
-                parse_mode="HTML"); return
+                f"❌ <b>Balans yetarli emas!</b>\n\n"
+                f"Kerak: <b>{fmt(price)} so'm</b>\n"
+                f"Sizda: <b>{fmt(bal)} so'm</b>",
+                parse_mode="HTML")
+            return
 
         proc    = await msg.answer("⏳ <b>Bajarilmoqda...</b>", parse_mode="HTML")
         svc_txt = f"⭐ Premium {months} oy" if service == "premium" else f"🌟 {fmt(stars or 0)} Stars"
@@ -236,7 +242,8 @@ async def on_webapp(msg: types.Message):
                 if o["id"] == order["id"]: o["status"] = "completed"
             sdb(d)
             await proc.edit_text(
-                f"🎉 <b>Muvaffaqiyatli yuborildi!</b>\n\n🛍 {svc_txt}\n👤 @{username}\n💰 {fmt(price)} so'm\n\n✨ Rahmat!",
+                f"🎉 <b>Muvaffaqiyatli yuborildi!</b>\n\n"
+                f"🛍 {svc_txt}\n👤 @{username}\n💰 {fmt(price)} so'm\n\n✨ Rahmat!",
                 parse_mode="HTML")
             await send_log(f"✅ #{order['id']} | {svc_txt} → @{username} | {fmt(price)} so'm")
         else:
@@ -249,6 +256,7 @@ async def on_webapp(msg: types.Message):
 
     except Exception as e:
         log.error(f"WebApp: {e}")
+        await msg.answer("❌ Xato yuz berdi. Qayta urinib ko'ring.")
 
 async def do_fragment(order):
     try:
@@ -283,10 +291,10 @@ def adm_kb():
 
 async def adm_text():
     d = db(); s = d["settings"]; p = s["prices"]
-    done = len([o for o in d["orders"] if o["status"]=="completed"])
-    rev  = sum(o["price"] for o in d["orders"] if o["status"]=="completed")
+    done  = len([o for o in d["orders"] if o["status"] == "completed"])
+    rev   = sum(o["price"] for o in d["orders"] if o["status"] == "completed")
     today = datetime.now().date().isoformat()
-    t_rev = sum(o["price"] for o in d["orders"] if o["status"]=="completed" and o["created_at"][:10]==today)
+    t_rev = sum(o["price"] for o in d["orders"] if o["status"] == "completed" and o["created_at"][:10] == today)
     return (
         f"👨‍💼 <b>Admin Panel — U-Gift</b>\n\n"
         f"<code>━━━━━━━━━━━━━━━━</code>\n"
@@ -303,7 +311,9 @@ async def adm_text():
     )
 
 def back_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")
+    ]])
 
 @dp.message(Command("admin"))
 async def cmd_admin(msg: types.Message, state: FSMContext):
@@ -322,8 +332,8 @@ async def cb_adm_main(cb: types.CallbackQuery, state: FSMContext):
 async def cb_stats(cb: types.CallbackQuery):
     if not is_admin(cb.from_user.id): return
     d = db(); today = datetime.now().date().isoformat()
-    t_rev = sum(o["price"] for o in d["orders"] if o["status"]=="completed" and o["created_at"][:10]==today)
-    total_rev = sum(o["price"] for o in d["orders"] if o["status"]=="completed")
+    t_rev = sum(o["price"] for o in d["orders"] if o["status"] == "completed" and o["created_at"][:10] == today)
+    total_rev = sum(o["price"] for o in d["orders"] if o["status"] == "completed")
     await cb.message.edit_text(
         f"📊 <b>Statistika</b>\n\n"
         f"👥 Foydalanuvchilar: <b>{len(d['users'])}</b>\n"
@@ -344,283 +354,337 @@ async def cb_users(cb: types.CallbackQuery):
         [InlineKeyboardButton(text="🔙 Orqaga",        callback_data="adm_main")],
     ])
     await cb.message.edit_text(
-        f"👥 Jami: <b>{len(d['users'])}</b>\nBanlangan: <b>{len([u for u in d['users'].values() if u.get('banned')])}</b>",
+        f"👥 Jami: <b>{len(d['users'])}</b>\n"
+        f"Banlangan: <b>{len([u for u in d['users'].values() if u.get('banned')])}</b>",
         parse_mode="HTML", reply_markup=kb)
 
 @dp.callback_query(F.data.in_({"adm_ban","adm_unban","adm_give_bal"}))
 async def cb_ban_act(cb: types.CallbackQuery, state: FSMContext):
-    labels = {"adm_ban":"bloklash (ID)","adm_unban":"ochish (ID)","adm_give_bal":"balans berish (ID SUMMA)"}
-    await cb.message.edit_text(labels[cb.data])
-    await state.update_data(ban_action=cb.data); await state.set_state(A.ban_id)
+    labels = {
+        "adm_ban"     : "🚫 Bloklash — ID kiriting:",
+        "adm_unban"   : "✅ Ochish — ID kiriting:",
+        "adm_give_bal": "💰 Balans berish — ID SUMMA kiriting:\n<i>Masalan: 123456789 50000</i>"
+    }
+    await cb.message.edit_text(labels[cb.data], parse_mode="HTML")
+    await state.update_data(ban_action=cb.data)
+    await state.set_state(A.ban_id)
 
 @dp.message(A.ban_id)
 async def enter_ban(msg: types.Message, state: FSMContext):
     try:
-        parts=msg.text.strip().split(); uid=str(int(parts[0]))
-        data=await state.get_data(); d=db(); action=data.get("ban_action")
+        parts = msg.text.strip().split(); uid = str(int(parts[0]))
+        data = await state.get_data(); d = db(); action = data.get("ban_action")
         if uid not in d["users"]: await msg.answer("❌ Topilmadi!"); await state.clear(); return
-        if action=="adm_ban": d["users"][uid]["banned"]=True; sdb(d); await msg.answer(f"🚫 Bloklandi: <code>{uid}</code>",parse_mode="HTML")
-        elif action=="adm_unban": d["users"][uid]["banned"]=False; sdb(d); await msg.answer(f"✅ Ochildi: <code>{uid}</code>",parse_mode="HTML")
-        elif action=="adm_give_bal":
-            if len(parts)<2: await msg.answer("❌ Format: ID SUMMA"); return
-            amt=int(parts[1]); d["users"][uid]["balance"]=d["users"][uid].get("balance",0)+amt; sdb(d)
-            try: await bot.send_message(int(uid),f"✅ <b>+{fmt(amt)} so'm</b> qo'shildi!",parse_mode="HTML")
+        if action == "adm_ban":
+            d["users"][uid]["banned"] = True; sdb(d)
+            await msg.answer(f"🚫 Bloklandi: <code>{uid}</code>", parse_mode="HTML")
+        elif action == "adm_unban":
+            d["users"][uid]["banned"] = False; sdb(d)
+            await msg.answer(f"✅ Ochildi: <code>{uid}</code>", parse_mode="HTML")
+        elif action == "adm_give_bal":
+            if len(parts) < 2: await msg.answer("❌ Format: ID SUMMA"); return
+            amt = int(parts[1])
+            d["users"][uid]["balance"] = d["users"][uid].get("balance", 0) + amt; sdb(d)
+            try: await bot.send_message(int(uid), f"✅ <b>+{fmt(amt)} so'm</b> qo'shildi!", parse_mode="HTML")
             except: pass
-            await msg.answer(f"✅ {fmt(amt)} so'm berildi!",parse_mode="HTML")
-        await state.clear(); await cmd_admin(msg,state)
+            await msg.answer(f"✅ {fmt(amt)} so'm berildi!", parse_mode="HTML")
+        await state.clear(); await cmd_admin(msg, state)
     except: await msg.answer("❌ Noto'g'ri format!")
 
-@dp.callback_query(F.data=="adm_prices")
+@dp.callback_query(F.data == "adm_prices")
 async def cb_prices(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d=db(); p=d["settings"]["prices"]
-    kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"🪙 1 Stars: {fmt(p['star'])} so'm",callback_data="adm_p_star")],
-        [InlineKeyboardButton(text=f"👑 3oy: {fmt(p['pm3'])} so'm",callback_data="adm_p_pm3")],
-        [InlineKeyboardButton(text=f"👑 6oy: {fmt(p['pm6'])} so'm",callback_data="adm_p_pm6")],
-        [InlineKeyboardButton(text=f"💎 12oy: {fmt(p['pm12'])} so'm",callback_data="adm_p_pm12")],
-        [InlineKeyboardButton(text="🔙 Orqaga",callback_data="adm_main")],
+    d = db(); p = d["settings"]["prices"]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🪙 1 Stars: {fmt(p['star'])} so'm", callback_data="adm_p_star")],
+        [InlineKeyboardButton(text=f"👑 3oy: {fmt(p['pm3'])} so'm",      callback_data="adm_p_pm3")],
+        [InlineKeyboardButton(text=f"👑 6oy: {fmt(p['pm6'])} so'm",      callback_data="adm_p_pm6")],
+        [InlineKeyboardButton(text=f"💎 12oy: {fmt(p['pm12'])} so'm",    callback_data="adm_p_pm12")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")],
     ])
-    await cb.message.edit_text("💰 <b>Narxlar</b>\n\n<i>O'zgartirsangiz React app da ham avtomatik o'zgaradi ✅</i>",parse_mode="HTML",reply_markup=kb)
+    await cb.message.edit_text(
+        "💰 <b>Narxlar</b>\n\n<i>O'zgartirsangiz React app da ham o'zgaradi ✅</i>",
+        parse_mode="HTML", reply_markup=kb)
 
 @dp.callback_query(F.data.in_({"adm_p_star","adm_p_pm3","adm_p_pm6","adm_p_pm12"}))
 async def cb_set_price(cb: types.CallbackQuery, state: FSMContext):
     if not is_super(cb.from_user.id): return
-    key=cb.data.replace("adm_p_","")
-    labels={"star":"1 Stars","pm3":"Premium 3oy","pm6":"Premium 6oy","pm12":"Premium 12oy"}
-    await cb.message.edit_text(f"💰 <b>{labels[key]}</b> yangi narxi (so'mda):",parse_mode="HTML")
+    key = cb.data.replace("adm_p_", "")
+    labels = {"star":"1 Stars","pm3":"Premium 3oy","pm6":"Premium 6oy","pm12":"Premium 12oy"}
+    await cb.message.edit_text(f"💰 <b>{labels[key]}</b> yangi narxi (so'mda):", parse_mode="HTML")
     await state.update_data(price_key=key); await state.set_state(A.price_key)
 
 @dp.message(A.price_key)
 async def enter_price(msg: types.Message, state: FSMContext):
     try:
-        v=int(msg.text.replace(" ","").replace(",",""))
-        if v<=0: await msg.answer("❌ 0 dan katta!"); return
-        data=await state.get_data(); d=db()
-        d["settings"]["prices"][data["price_key"]]=v; sdb(d)
-        await msg.answer(f"✅ Narx yangilandi: <b>{fmt(v)} so'm</b>\n<i>React app da ham o'zgardi ✅</i>",parse_mode="HTML")
-        await state.clear(); await cmd_admin(msg,state)
+        v = int(msg.text.replace(" ","").replace(",",""))
+        if v <= 0: await msg.answer("❌ 0 dan katta!"); return
+        data = await state.get_data(); d = db()
+        d["settings"]["prices"][data["price_key"]] = v; sdb(d)
+        await msg.answer(f"✅ Narx yangilandi: <b>{fmt(v)} so'm</b>", parse_mode="HTML")
+        await state.clear(); await cmd_admin(msg, state)
     except: await msg.answer("❌ Faqat raqam!")
 
-@dp.callback_query(F.data=="adm_promos")
+@dp.callback_query(F.data == "adm_promos")
 async def cb_promos(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d=db(); promos=d.get("promo_codes",{})
-    pt="\n".join([f"• <code>{k}</code> — {v['discount']}% | {v.get('product','all')} | {v.get('used',0)}/{v.get('limit','∞')}" for k,v in promos.items()]) if promos else "Yo'q"
-    kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Yaratish",callback_data="adm_new_promo"),
-         InlineKeyboardButton(text="🗑 Tozalash",callback_data="adm_clear_promos")],
-        [InlineKeyboardButton(text="🔙 Orqaga",callback_data="adm_main")],
+    d = db(); promos = d.get("promo_codes", {})
+    pt = "\n".join([
+        f"• <code>{k}</code> — {v['discount']}% | {v.get('product','all')} | {v.get('used',0)}/{v.get('limit','∞')}"
+        for k, v in promos.items()
+    ]) if promos else "Yo'q"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Yaratish", callback_data="adm_new_promo"),
+         InlineKeyboardButton(text="🗑 Tozalash", callback_data="adm_clear_promos")],
+        [InlineKeyboardButton(text="🔙 Orqaga",   callback_data="adm_main")],
     ])
-    await cb.message.edit_text(f"🎁 <b>Promo kodlar:</b>\n\n{pt}",parse_mode="HTML",reply_markup=kb)
+    await cb.message.edit_text(f"🎁 <b>Promo kodlar:</b>\n\n{pt}", parse_mode="HTML", reply_markup=kb)
 
-@dp.callback_query(F.data=="adm_new_promo")
+@dp.callback_query(F.data == "adm_new_promo")
 async def new_promo(cb: types.CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("🎁 Promo kod nomi:"); await state.set_state(A.promo_code)
+    await cb.message.edit_text("🎁 Promo kod nomi (masalan: SALE20):")
+    await state.set_state(A.promo_code)
 
 @dp.message(A.promo_code)
 async def enter_promo_code(msg: types.Message, state: FSMContext):
     await state.update_data(promo_code=msg.text.strip().upper())
-    kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Hammasi",callback_data="pp_all")],
-        [InlineKeyboardButton(text="🌟 Stars",callback_data="pp_star")],
-        [InlineKeyboardButton(text="👑 Premium 3oy",callback_data="pp_pm3")],
-        [InlineKeyboardButton(text="👑 Premium 6oy",callback_data="pp_pm6")],
-        [InlineKeyboardButton(text="💎 Premium 12oy",callback_data="pp_pm12")],
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ Hammasi",      callback_data="pp_all")],
+        [InlineKeyboardButton(text="🌟 Stars",        callback_data="pp_star")],
+        [InlineKeyboardButton(text="👑 Premium 3oy",  callback_data="pp_pm3")],
+        [InlineKeyboardButton(text="👑 Premium 6oy",  callback_data="pp_pm6")],
+        [InlineKeyboardButton(text="💎 Premium 12oy", callback_data="pp_pm12")],
     ])
-    await msg.answer("🛍 Qaysi mahsulot?",reply_markup=kb); await state.set_state(A.promo_product)
+    await msg.answer("🛍 Qaysi mahsulot uchun?", reply_markup=kb)
+    await state.set_state(A.promo_product)
 
 @dp.callback_query(F.data.startswith("pp_"))
 async def cb_promo_prod(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(promo_product=cb.data[3:])
-    await cb.message.edit_text("📈 Chegirma foizi (1-90):"); await state.set_state(A.promo_disc)
+    await cb.message.edit_text("📈 Chegirma foizi (1-90):")
+    await state.set_state(A.promo_disc)
 
 @dp.message(A.promo_disc)
 async def enter_promo_disc(msg: types.Message, state: FSMContext):
     try:
-        v=int(msg.text)
-        if v<1 or v>90: await msg.answer("❌ 1-90!"); return
+        v = int(msg.text)
+        if v < 1 or v > 90: await msg.answer("❌ 1-90 orasida!"); return
         await state.update_data(promo_disc=v)
-        await msg.answer("🔢 Necha kishi? (0=cheksiz):"); await state.set_state(A.promo_limit)
+        await msg.answer("🔢 Necha kishi uchun? (0 = cheksiz):")
+        await state.set_state(A.promo_limit)
     except: await msg.answer("❌ Faqat raqam!")
 
 @dp.message(A.promo_limit)
 async def enter_promo_limit(msg: types.Message, state: FSMContext):
     try:
-        limit=int(msg.text); data=await state.get_data(); d=db()
-        d["promo_codes"][data["promo_code"]]={
-            "discount":data["promo_disc"],"product":data.get("promo_product","all"),
-            "limit":limit if limit>0 else None,"used":0,"created_at":datetime.now().isoformat()
+        limit = int(msg.text); data = await state.get_data(); d = db()
+        prods = {"all":"Hammasi","star":"Stars","pm3":"P3oy","pm6":"P6oy","pm12":"P12oy"}
+        d["promo_codes"][data["promo_code"]] = {
+            "discount"  : data["promo_disc"],
+            "product"   : data.get("promo_product", "all"),
+            "limit"     : limit if limit > 0 else None,
+            "used"      : 0,
+            "created_at": datetime.now().isoformat()
         }; sdb(d)
-        await msg.answer(f"✅ <b>Promo yaratildi!</b>\n🎁 <code>{data['promo_code']}</code>\n📉 {data['promo_disc']}%\n🔢 {limit if limit>0 else 'Cheksiz'}",parse_mode="HTML")
-        await state.clear(); await cmd_admin(msg,state)
+        await msg.answer(
+            f"✅ <b>Promo yaratildi!</b>\n\n"
+            f"🎁 <code>{data['promo_code']}</code>\n"
+            f"📉 {data['promo_disc']}%\n"
+            f"🛍 {prods.get(data.get('promo_product','all'))}\n"
+            f"🔢 {limit if limit > 0 else 'Cheksiz'}",
+            parse_mode="HTML")
+        await state.clear(); await cmd_admin(msg, state)
     except: await msg.answer("❌ Faqat raqam!")
 
-@dp.callback_query(F.data=="adm_clear_promos")
+@dp.callback_query(F.data == "adm_clear_promos")
 async def clear_promos(cb: types.CallbackQuery):
-    d=db(); d["promo_codes"]={};sdb(d); await cb.answer("✅ Tozalandi!"); await cb_promos(cb)
+    d = db(); d["promo_codes"] = {}; sdb(d)
+    await cb.answer("✅ Tozalandi!"); await cb_promos(cb)
 
-@dp.callback_query(F.data=="adm_orders")
+@dp.callback_query(F.data == "adm_orders")
 async def cb_orders(cb: types.CallbackQuery):
     if not is_admin(cb.from_user.id): return
-    d=db(); orders=d["orders"][-8:]
-    if not orders: await cb.answer("Yo'q!",show_alert=True); return
-    st={"completed":"✅","failed":"❌","processing":"⏳"}
-    text="📋 <b>So'nggi buyurtmalar:</b>\n\n"
+    d = db(); orders = d["orders"][-8:]
+    if not orders: await cb.answer("Buyurtmalar yo'q!", show_alert=True); return
+    st = {"completed":"✅","failed":"❌","processing":"⏳"}
+    text = "📋 <b>So'nggi buyurtmalar:</b>\n\n"
     for o in reversed(orders):
-        svc={"premium":f"P{o.get('months',3)}oy","stars":f"{fmt(o.get('stars',0))}⭐"}.get(o["service"],o["service"])
-        text+=f"{st.get(o['status'],'❓')} #{o['id']} @{o.get('username','?')} — {svc} — {fmt(o['price'])} so'm\n"
-    await cb.message.edit_text(text,parse_mode="HTML",reply_markup=back_kb())
+        svc = {"premium":f"P{o.get('months',3)}oy","stars":f"{fmt(o.get('stars',0))}⭐"}.get(o["service"],o["service"])
+        text += f"{st.get(o['status'],'❓')} #{o['id']} @{o.get('username','?')} — {svc} — {fmt(o['price'])} so'm\n"
+    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_kb())
 
-@dp.callback_query(F.data=="adm_broadcast")
+@dp.callback_query(F.data == "adm_broadcast")
 async def cb_broadcast(cb: types.CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id): return
-    await cb.message.edit_text("📢 Xabar yozing:"); await state.set_state(A.broadcast)
+    await cb.message.edit_text("📢 Xabar yozing:")
+    await state.set_state(A.broadcast)
 
 @dp.message(A.broadcast)
 async def enter_broadcast(msg: types.Message, state: FSMContext):
-    d=db(); sent=failed=0
-    prog=await msg.answer(f"⏳ 0/{len(d['users'])}")
-    for i,uid in enumerate(d["users"]):
-        try: await bot.send_message(int(uid),f"📢 <b>Xabar:</b>\n\n{msg.text}",parse_mode="HTML"); sent+=1
-        except: failed+=1
-        if i%20==0:
+    d = db(); sent = failed = 0
+    prog = await msg.answer(f"⏳ 0/{len(d['users'])}")
+    for i, uid in enumerate(d["users"]):
+        try: await bot.send_message(int(uid), f"📢 <b>Xabar:</b>\n\n{msg.text}", parse_mode="HTML"); sent += 1
+        except: failed += 1
+        if i % 20 == 0:
             try: await prog.edit_text(f"⏳ {i}/{len(d['users'])}")
             except: pass
         await asyncio.sleep(0.05)
     await prog.edit_text(f"✅ Yuborildi! ✅{sent} ❌{failed}")
-    await state.clear(); await cmd_admin(msg,state)
+    await state.clear(); await cmd_admin(msg, state)
 
-@dp.callback_query(F.data=="adm_logo")
+@dp.callback_query(F.data == "adm_logo")
 async def cb_logo(cb: types.CallbackQuery, state: FSMContext):
     if not is_super(cb.from_user.id): return
-    await cb.message.edit_text("🖼 Logo rasmini yuboring:"); await state.set_state(A.logo)
+    await cb.message.edit_text("🖼 Logo rasmini yuboring (512×512 px):")
+    await state.set_state(A.logo)
 
 @dp.message(A.logo)
 async def enter_logo(msg: types.Message, state: FSMContext):
-    if not msg.photo: await msg.answer("❌ Rasm!"); return
-    d=db(); d["settings"]["logo_file_id"]=msg.photo[-1].file_id; sdb(d)
-    await msg.answer("✅ Logo saqlandi!"); await state.clear(); await cmd_admin(msg,state)
+    if not msg.photo: await msg.answer("❌ Rasm yuboring!"); return
+    d = db(); d["settings"]["logo_file_id"] = msg.photo[-1].file_id; sdb(d)
+    await msg.answer("✅ Logo saqlandi!")
+    await state.clear(); await cmd_admin(msg, state)
 
-@dp.callback_query(F.data=="adm_settings")
+@dp.callback_query(F.data == "adm_settings")
 async def cb_settings(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d=db(); s=d["settings"]
-    kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"⭐ Min Stars: {s['min_stars']}",callback_data="adm_set_minstars")],
-        [InlineKeyboardButton(text=f"👥 Ref bonus: {fmt(s['referral_bonus'])} so'm",callback_data="adm_set_refbonus")],
-        [InlineKeyboardButton(text="💬 Support linki",callback_data="adm_set_support")],
-        [InlineKeyboardButton(text="📣 Kanal linki",callback_data="adm_set_chanlink")],
-        [InlineKeyboardButton(text="🔙 Orqaga",callback_data="adm_main")],
+    d = db(); s = d["settings"]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"⭐ Min Stars: {s['min_stars']}", callback_data="adm_set_minstars")],
+        [InlineKeyboardButton(text=f"👥 Ref bonus: {fmt(s['referral_bonus'])} so'm", callback_data="adm_set_refbonus")],
+        [InlineKeyboardButton(text="💬 Support linki", callback_data="adm_set_support")],
+        [InlineKeyboardButton(text="📣 Kanal linki",   callback_data="adm_set_chanlink")],
+        [InlineKeyboardButton(text="🔙 Orqaga",        callback_data="adm_main")],
     ])
-    await cb.message.edit_text("⚙️ <b>Sozlamalar</b>",parse_mode="HTML",reply_markup=kb)
+    await cb.message.edit_text("⚙️ <b>Sozlamalar</b>", parse_mode="HTML", reply_markup=kb)
 
 @dp.callback_query(F.data.in_({"adm_set_minstars","adm_set_refbonus","adm_set_support","adm_set_chanlink"}))
 async def cb_set_settings(cb: types.CallbackQuery, state: FSMContext):
-    d={"adm_set_minstars":("Min Stars:",A.min_stars),"adm_set_refbonus":("Ref bonus (so'm):",A.ref_bonus),"adm_set_support":("Support linki:",A.support),"adm_set_chanlink":("Kanal linki:",A.channel_link)}
-    lbl,st=d[cb.data]; await cb.message.edit_text(lbl); await state.set_state(st)
+    d = {
+        "adm_set_minstars": ("⭐ Min Stars:", A.min_stars),
+        "adm_set_refbonus": ("👥 Ref bonus (so'm):", A.ref_bonus),
+        "adm_set_support" : ("💬 Support linki:", A.support),
+        "adm_set_chanlink": ("📣 Kanal linki:", A.channel_link),
+    }
+    lbl, st = d[cb.data]
+    await cb.message.edit_text(lbl)
+    await state.set_state(st)
 
 @dp.message(A.min_stars)
-async def e_min(msg,state):
+async def e_min(msg: types.Message, state: FSMContext):
     try:
-        v=int(msg.text)
-        if v<50: await msg.answer("❌ Min 50!"); return
-        d=db(); d["settings"]["min_stars"]=v; sdb(d)
-        await msg.answer(f"✅ {v}"); await state.clear(); await cmd_admin(msg,state)
+        v = int(msg.text)
+        if v < 50: await msg.answer("❌ Min 50!"); return
+        d = db(); d["settings"]["min_stars"] = v; sdb(d)
+        await msg.answer(f"✅ Min Stars: {v}")
+        await state.clear(); await cmd_admin(msg, state)
     except: await msg.answer("❌ Raqam!")
 
 @dp.message(A.ref_bonus)
-async def e_ref(msg,state):
+async def e_ref(msg: types.Message, state: FSMContext):
     try:
-        v=int(msg.text.replace(" ","")); d=db(); d["settings"]["referral_bonus"]=v; sdb(d)
-        await msg.answer(f"✅ {fmt(v)} so'm"); await state.clear(); await cmd_admin(msg,state)
+        v = int(msg.text.replace(" ", ""))
+        d = db(); d["settings"]["referral_bonus"] = v; sdb(d)
+        await msg.answer(f"✅ Ref bonus: {fmt(v)} so'm")
+        await state.clear(); await cmd_admin(msg, state)
     except: await msg.answer("❌ Raqam!")
 
 @dp.message(A.support)
-async def e_sup(msg,state):
-    d=db(); d["settings"]["support_link"]=msg.text.strip(); sdb(d)
-    await msg.answer("✅ Saqlandi!"); await state.clear(); await cmd_admin(msg,state)
+async def e_sup(msg: types.Message, state: FSMContext):
+    d = db(); d["settings"]["support_link"] = msg.text.strip(); sdb(d)
+    await msg.answer("✅ Support saqlandi!")
+    await state.clear(); await cmd_admin(msg, state)
 
 @dp.message(A.channel_link)
-async def e_chan(msg,state):
-    d=db(); d["settings"]["channel_link"]=msg.text.strip(); sdb(d)
-    await msg.answer("✅ Saqlandi!"); await state.clear(); await cmd_admin(msg,state)
+async def e_chan(msg: types.Message, state: FSMContext):
+    d = db(); d["settings"]["channel_link"] = msg.text.strip(); sdb(d)
+    await msg.answer("✅ Kanal saqlandi!")
+    await state.clear(); await cmd_admin(msg, state)
 
-@dp.callback_query(F.data=="adm_channels")
+@dp.callback_query(F.data == "adm_channels")
 async def cb_channels(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d=db(); chs=d["settings"]["required_channels"]; logs=d["settings"].get("logs_channel","Yo'q")
-    ct="\n".join([f"• {c}" for c in chs]) if chs else "Yo'q"
-    kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Qo'shish",callback_data="adm_add_ch")],
-        [InlineKeyboardButton(text="📝 Logs",callback_data="adm_set_logs")],
-        [InlineKeyboardButton(text="🗑 Tozalash",callback_data="adm_clear_ch")],
-        [InlineKeyboardButton(text="🔙 Orqaga",callback_data="adm_main")],
+    d = db(); chs = d["settings"]["required_channels"]; logs = d["settings"].get("logs_channel","Yo'q")
+    ct = "\n".join([f"• {c}" for c in chs]) if chs else "Yo'q"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Qo'shish", callback_data="adm_add_ch")],
+        [InlineKeyboardButton(text="📝 Logs",     callback_data="adm_set_logs")],
+        [InlineKeyboardButton(text="🗑 Tozalash",  callback_data="adm_clear_ch")],
+        [InlineKeyboardButton(text="🔙 Orqaga",   callback_data="adm_main")],
     ])
-    await cb.message.edit_text(f"📢 <b>Kanallar:</b>\n{ct}\n\n📝 Logs: {logs}",parse_mode="HTML",reply_markup=kb)
+    await cb.message.edit_text(f"📢 <b>Kanallar:</b>\n{ct}\n\n📝 Logs: {logs}", parse_mode="HTML", reply_markup=kb)
 
-@dp.callback_query(F.data=="adm_add_ch")
-async def add_ch(cb,state): await cb.message.edit_text("📢 Kanal @username:"); await state.set_state(A.channel)
+@dp.callback_query(F.data == "adm_add_ch")
+async def add_ch(cb: types.CallbackQuery, state: FSMContext):
+    await cb.message.edit_text("📢 Kanal @username:"); await state.set_state(A.channel)
 
 @dp.message(A.channel)
-async def e_ch(msg,state):
-    d=db(); d["settings"]["required_channels"].append(msg.text.strip()); sdb(d)
-    await msg.answer(f"✅ {msg.text.strip()}"); await state.clear(); await cmd_admin(msg,state)
+async def e_ch(msg: types.Message, state: FSMContext):
+    d = db(); d["settings"]["required_channels"].append(msg.text.strip()); sdb(d)
+    await msg.answer(f"✅ {msg.text.strip()}")
+    await state.clear(); await cmd_admin(msg, state)
 
-@dp.callback_query(F.data=="adm_clear_ch")
-async def clear_ch(cb):
-    d=db(); d["settings"]["required_channels"]=[]; sdb(d); await cb.answer("✅"); await cb_channels(cb)
+@dp.callback_query(F.data == "adm_clear_ch")
+async def clear_ch(cb: types.CallbackQuery):
+    d = db(); d["settings"]["required_channels"] = []; sdb(d)
+    await cb.answer("✅ Tozalandi!"); await cb_channels(cb)
 
-@dp.callback_query(F.data=="adm_set_logs")
-async def set_logs(cb,state): await cb.message.edit_text("📝 Logs kanal:"); await state.set_state(A.logs)
+@dp.callback_query(F.data == "adm_set_logs")
+async def set_logs(cb: types.CallbackQuery, state: FSMContext):
+    await cb.message.edit_text("📝 Logs kanal:"); await state.set_state(A.logs)
 
 @dp.message(A.logs)
-async def e_logs(msg,state):
-    d=db(); d["settings"]["logs_channel"]=msg.text.strip(); sdb(d)
-    await msg.answer("✅ Saqlandi!"); await state.clear(); await cmd_admin(msg,state)
+async def e_logs(msg: types.Message, state: FSMContext):
+    d = db(); d["settings"]["logs_channel"] = msg.text.strip(); sdb(d)
+    await msg.answer("✅ Logs saqlandi!")
+    await state.clear(); await cmd_admin(msg, state)
 
-@dp.callback_query(F.data=="adm_admins")
+@dp.callback_query(F.data == "adm_admins")
 async def cb_admins(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d=db(); admins=d.get("admins",{})
-    at="\n".join([f"• <code>{a}</code>" for a in admins]) if admins else "Yo'q"
-    kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Qo'shish",callback_data="adm_add_admin"),
-         InlineKeyboardButton(text="➖ O'chirish",callback_data="adm_del_admin")],
-        [InlineKeyboardButton(text="🔙 Orqaga",callback_data="adm_main")],
+    d = db(); admins = d.get("admins", {})
+    at = "\n".join([f"• <code>{a}</code>" for a in admins]) if admins else "Yo'q"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Qo'shish",  callback_data="adm_add_admin"),
+         InlineKeyboardButton(text="➖ O'chirish", callback_data="adm_del_admin")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")],
     ])
-    await cb.message.edit_text(f"👑 <b>Adminlar:</b>\n\n{at}",parse_mode="HTML",reply_markup=kb)
+    await cb.message.edit_text(f"👑 <b>Adminlar:</b>\n\n{at}", parse_mode="HTML", reply_markup=kb)
 
 @dp.callback_query(F.data.in_({"adm_add_admin","adm_del_admin"}))
-async def manage_admin(cb,state):
-    await cb.message.edit_text(f"👑 Admin ID ({'qo\'shish' if cb.data=='adm_add_admin' else 'o\'chirish'}):")
+async def manage_admin(cb: types.CallbackQuery, state: FSMContext):
+    action = "qo'shish" if cb.data == "adm_add_admin" else "o'chirish"
+    await cb.message.edit_text(f"👑 Admin ID ({action}):")
     await state.update_data(admin_action=cb.data); await state.set_state(A.admin_id)
 
 @dp.message(A.admin_id)
 async def enter_admin(msg: types.Message, state: FSMContext):
     try:
-        aid=int(msg.text.strip())
-        if aid==SUPER_ADMIN_ID: await msg.answer("❌ Mumkin emas!"); await state.clear(); return
-        data=await state.get_data(); d=db()
-        if data.get("admin_action")=="adm_add_admin":
-            d["admins"][str(aid)]={"added":datetime.now().isoformat()}; sdb(d); await msg.answer(f"✅ Admin: <code>{aid}</code>",parse_mode="HTML")
+        aid = int(msg.text.strip())
+        if aid == SUPER_ADMIN_ID: await msg.answer("❌ Mumkin emas!"); await state.clear(); return
+        data = await state.get_data(); d = db()
+        if data.get("admin_action") == "adm_add_admin":
+            d["admins"][str(aid)] = {"added": datetime.now().isoformat()}; sdb(d)
+            await msg.answer(f"✅ Admin: <code>{aid}</code>", parse_mode="HTML")
         else:
-            if str(aid) in d["admins"]: del d["admins"][str(aid)]; sdb(d); await msg.answer(f"✅ O'chirildi")
+            if str(aid) in d["admins"]: del d["admins"][str(aid)]; sdb(d); await msg.answer("✅ O'chirildi")
             else: await msg.answer("❌ Topilmadi!")
-        await state.clear(); await cmd_admin(msg,state)
+        await state.clear(); await cmd_admin(msg, state)
     except: await msg.answer("❌ Noto'g'ri ID!")
 
-@dp.callback_query(F.data=="adm_toggle_bot")
-async def toggle_bot(cb,state):
+@dp.callback_query(F.data == "adm_toggle_bot")
+async def toggle_bot(cb: types.CallbackQuery, state: FSMContext):
     if not is_super(cb.from_user.id): return
-    d=db(); d["settings"]["bot_active"]=not d["settings"]["bot_active"]; sdb(d)
-    await cb.answer(f"Bot {'✅' if d['settings']['bot_active'] else '❌'}",show_alert=True)
-    await cb_adm_main(cb,None)
+    d = db(); d["settings"]["bot_active"] = not d["settings"]["bot_active"]; sdb(d)
+    await cb.answer(f"Bot {'✅' if d['settings']['bot_active'] else '❌'}", show_alert=True)
+    await cb_adm_main(cb, None)
 
 # ─── MAIN ───
 async def main():
     log.info("🚀 U-Gift Bot (React versiya) ishga tushmoqda...")
     log.info(f"📁 Database: {DB}")
+    log.info(f"🌐 WEB_URL: {WEB_URL}")
     await set_menu_button()
     await dp.start_polling(bot, skip_updates=True)
 

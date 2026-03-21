@@ -1,6 +1,5 @@
 """
 U-Gift Flask Server - React versiya
-webapp/ papkasi: ~/webapp/ (React build)
 """
 import json, os, asyncio
 from datetime import datetime
@@ -9,9 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# React build papkasi — ~/webapp/
-WEBAPP_DIR = os.path.join(os.path.expanduser("~"), "webapp")
-
+WEBAPP_DIR     = os.path.join(os.path.expanduser("~"), "webapp")
 app            = Flask(__name__, static_folder=WEBAPP_DIR, static_url_path="")
 DB             = os.path.join(os.path.expanduser("~"), "ugift-react", "database.json")
 QULAYPAY_KEY   = os.getenv("QULAYPAY_API_KEY", "")
@@ -39,7 +36,6 @@ def sdb(data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def fmt(n): return f"{int(n):,}".replace(",", " ")
-def is_admin(uid): return int(uid) == SUPER_ADMIN_ID or str(uid) in db().get("admins", {})
 
 async def send_tg(chat_id, text):
     try:
@@ -51,18 +47,15 @@ async def send_tg(chat_id, text):
             )
     except: pass
 
-# ─── REACT APP ───
+# ─── REACT SPA ───
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_react(path):
-    # API va webhook so'rovlarini o'tkazib yuborish
     if path.startswith("api/") or path.startswith("webhook/"):
         return jsonify({"error": "not found"}), 404
-    # React faylini topish
     full = os.path.join(WEBAPP_DIR, path)
     if path and os.path.exists(full):
         return send_from_directory(WEBAPP_DIR, path)
-    # SPA — index.html qaytarish
     return send_from_directory(WEBAPP_DIR, "index.html")
 
 # ─── API: SETTINGS ───
@@ -87,7 +80,7 @@ def api_settings():
 # ─── API: PROMO CHECK ───
 @app.route("/api/promo/check", methods=["POST"])
 def api_promo_check():
-    data    = request.json
+    data    = request.json or {}
     code    = data.get("code", "").upper().strip()
     uid     = str(data.get("uid", "0"))
     product = data.get("product", "all")
@@ -102,14 +95,13 @@ def api_promo_check():
     if promo.get("limit") and promo.get("used", 0) >= promo["limit"]:
         return jsonify({"success": False, "error": "Promo kodning limiti tugagan"})
     if code in d["users"].get(uid, {}).get("promo_used", []):
-        return jsonify({"success": False, "error": "Siz bu promo kodni allaqachon ishlatgansiz"})
-
+        return jsonify({"success": False, "error": "Allaqachon ishlatgansiz"})
     return jsonify({"success": True, "discount": promo["discount"]})
 
 # ─── API: TOPUP CREATE ───
 @app.route("/api/topup/create", methods=["POST"])
 def api_topup_create():
-    data   = request.json
+    data   = request.json or {}
     uid    = str(data.get("uid", "0"))
     amount = int(data.get("amount", 0))
 
@@ -128,7 +120,6 @@ def api_topup_create():
                 "access_token": QULAYPAY_KEY,
                 "amount"      : amount,
                 "comment"     : f"U-Gift balans | ID:{uid}",
-                "redirect_url": f"https://t.me/U_gift_robot",
             },
             timeout=10
         )
@@ -145,7 +136,7 @@ def api_topup_create():
             sdb(d)
             return jsonify({"success": True, "payment_url": txn["payment_url"]})
         else:
-            return jsonify({"success": False, "error": res.get("message", "Xato")})
+            return jsonify({"success": False, "error": res.get("message", "Qulaypay xatosi")})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -175,17 +166,17 @@ def api_top10():
         elif period == "monthly":
             if o["created_at"][:7] != today[:7]: continue
 
-        uid   = o["user_id"]
+        uid_o = o["user_id"]
         stars = o.get("stars", 0) or 0
-        if uid not in top: top[uid] = {"stars": 0, "orders": 0}
-        top[uid]["stars"]  += stars
-        top[uid]["orders"] += 1
+        if uid_o not in top: top[uid_o] = {"stars": 0, "orders": 0}
+        top[uid_o]["stars"]  += stars
+        top[uid_o]["orders"] += 1
 
     result = []
-    for uid, stats in sorted(top.items(), key=lambda x: x[1]["stars"], reverse=True)[:10]:
-        u = d["users"].get(uid, {})
+    for uid_o, stats in sorted(top.items(), key=lambda x: x[1]["stars"], reverse=True)[:10]:
+        u = d["users"].get(uid_o, {})
         result.append({
-            "uid"   : uid,
+            "uid"   : uid_o,
             "name"  : u.get("name", "Foydalanuvchi"),
             "stars" : stats["stars"],
             "orders": stats["orders"],
@@ -220,7 +211,8 @@ def qulaypay_webhook():
     data = request.json
     if not data: return jsonify({"status": "error"}), 400
 
-    print(f"[Qulaypay]: {data}")
+    print(f"[Qulaypay webhook]: {data}")
+
     txn    = data.get("transaction") or {}
     txn_id = txn.get("id") or data.get("id")
     status = txn.get("status") or data.get("status")
