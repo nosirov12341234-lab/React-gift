@@ -47,7 +47,6 @@ async def send_tg(chat_id, text):
             )
     except: pass
 
-# ─── REACT SPA ───
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_react(path):
@@ -58,7 +57,6 @@ def serve_react(path):
         return send_from_directory(WEBAPP_DIR, path)
     return send_from_directory(WEBAPP_DIR, "index.html")
 
-# ─── API: SETTINGS ───
 @app.route("/api/settings")
 def api_settings():
     uid = request.args.get("uid", "0")
@@ -77,7 +75,6 @@ def api_settings():
         "orders_count"  : len(u.get("orders", [])),
     })
 
-# ─── API: PROMO CHECK ───
 @app.route("/api/promo/check", methods=["POST"])
 def api_promo_check():
     data    = request.json or {}
@@ -86,7 +83,6 @@ def api_promo_check():
     product = data.get("product", "all")
     d       = db()
     promos  = d.get("promo_codes", {})
-
     if code not in promos:
         return jsonify({"success": False, "error": "Noto'g'ri promo kod"})
     promo = promos[code]
@@ -98,7 +94,6 @@ def api_promo_check():
         return jsonify({"success": False, "error": "Allaqachon ishlatgansiz"})
     return jsonify({"success": True, "discount": promo["discount"]})
 
-# ─── API: TOPUP CREATE ───
 @app.route("/api/topup/create", methods=["POST"])
 def api_topup_create():
     data   = request.json or {}
@@ -120,10 +115,12 @@ def api_topup_create():
                 "access_token": QULAYPAY_KEY,
                 "amount"      : amount,
                 "comment"     : f"U-Gift balans | ID:{uid}",
+                "provider"    : "click",
             },
             timeout=10
         )
         res = r.json()
+        print(f"[Qulaypay response]: {res}")
         if res.get("status") == "success":
             txn = res["transaction"]
             d   = db()
@@ -140,7 +137,6 @@ def api_topup_create():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
-# ─── API: HISTORY ───
 @app.route("/api/history")
 def api_history():
     uid    = request.args.get("uid", "0")
@@ -148,14 +144,12 @@ def api_history():
     orders = [o for o in d["orders"] if o["user_id"] == str(uid)][-20:]
     return jsonify({"orders": list(reversed(orders))})
 
-# ─── API: TOP10 ───
 @app.route("/api/top10")
 def api_top10():
     period = request.args.get("period", "daily")
     d      = db()
     today  = datetime.now().date().isoformat()
     top    = {}
-
     for o in d["orders"]:
         if o["status"] != "completed": continue
         if period == "daily" and o["created_at"][:10] != today: continue
@@ -165,39 +159,26 @@ def api_top10():
             if o["created_at"][:10] < week_ago: continue
         elif period == "monthly":
             if o["created_at"][:7] != today[:7]: continue
-
         uid_o = o["user_id"]
         stars = o.get("stars", 0) or 0
         if uid_o not in top: top[uid_o] = {"stars": 0, "orders": 0}
         top[uid_o]["stars"]  += stars
         top[uid_o]["orders"] += 1
-
     result = []
     for uid_o, stats in sorted(top.items(), key=lambda x: x[1]["stars"], reverse=True)[:10]:
         u = d["users"].get(uid_o, {})
-        result.append({
-            "uid"   : uid_o,
-            "name"  : u.get("name", "Foydalanuvchi"),
-            "stars" : stats["stars"],
-            "orders": stats["orders"],
-        })
+        result.append({"uid":uid_o,"name":u.get("name","Foydalanuvchi"),"stars":stats["stars"],"orders":stats["orders"]})
     return jsonify({"top": result})
 
-# ─── API: REFERRAL ───
 @app.route("/api/referral")
 def api_referral():
     uid = request.args.get("uid", "0")
-    d   = db()
-    u   = d["users"].get(str(uid), {})
-
+    d   = db(); u = d["users"].get(str(uid), {})
     import requests as req
     try:
-        me       = req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=5).json()
-        username = me["result"]["username"]
-        link     = f"https://t.me/{username}?start=ref_{uid}"
-    except:
-        link = ""
-
+        me   = req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=5).json()
+        link = f"https://t.me/{me['result']['username']}?start=ref_{uid}"
+    except: link = ""
     return jsonify({
         "link"      : link,
         "referrals" : u.get("referrals", 0),
@@ -205,48 +186,30 @@ def api_referral():
         "bonus"     : d["settings"].get("referral_bonus", 5000),
     })
 
-# ─── QULAYPAY WEBHOOK ───
 @app.route("/webhook/qulaypay", methods=["POST"])
 def qulaypay_webhook():
     data = request.json
     if not data: return jsonify({"status": "error"}), 400
-
     print(f"[Qulaypay webhook]: {data}")
-
     txn    = data.get("transaction") or {}
     txn_id = txn.get("id") or data.get("id")
     status = txn.get("status") or data.get("status")
     amount = txn.get("amount") or data.get("amount")
-
-    if status != "paid":
-        return jsonify({"status": "ok"})
-
-    d       = db()
-    pending = d.get("pending_topups", {})
-    if txn_id not in pending:
-        return jsonify({"status": "ok"})
-
-    topup = pending[txn_id]
-    uid   = topup["uid"]
+    if status != "paid": return jsonify({"status": "ok"})
+    d = db(); pending = d.get("pending_topups", {})
+    if txn_id not in pending: return jsonify({"status": "ok"})
+    topup = pending[txn_id]; uid = topup["uid"]
     amt   = int(topup.get("amount") or amount or 0)
-
     if uid in d["users"]:
         d["users"][uid]["balance"] = d["users"][uid].get("balance", 0) + amt
-        del d["pending_topups"][txn_id]
-        sdb(d)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(send_tg(
-            int(uid),
-            f"✅ <b>Balansingiz to'ldirildi!</b>\n\n"
-            f"➕ <b>+{fmt(amt)} so'm</b>\n"
-            f"💰 Joriy balans: <b>{fmt(d['users'][uid]['balance'])} so'm</b>"
-        ))
+        del d["pending_topups"][txn_id]; sdb(d)
+        loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
+        loop.run_until_complete(send_tg(int(uid),
+            f"✅ <b>Balansingiz to'ldirildi!</b>\n\n➕ <b>+{fmt(amt)} so'm</b>\n💰 Joriy: <b>{fmt(d['users'][uid]['balance'])} so'm</b>"))
         loop.close()
-
     return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
-    print(f"✅ Webapp papkasi: {WEBAPP_DIR}")
-    print(f"✅ Database: {DB}")
+    print(f"✅ Webapp: {WEBAPP_DIR}")
+    print(f"✅ DB: {DB}")
     app.run(host="0.0.0.0", port=5000, debug=False)

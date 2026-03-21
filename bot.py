@@ -1,5 +1,7 @@
 """
 U-Gift Bot - React versiya
+Inline tugmalar: xabar tagida
+Menu button: o'chirilgan
 """
 import asyncio, logging, json, os
 from datetime import datetime
@@ -10,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
-    WebAppInfo, MenuButtonWebApp
+    WebAppInfo, MenuButtonDefault
 )
 from dotenv import load_dotenv
 
@@ -76,18 +78,29 @@ async def check_sub(uid):
         except: pass
     return True
 
-async def set_menu_button():
+async def remove_menu_button():
+    """Pastdagi menu buttonni o'chirish"""
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        log.info("✅ Menu button o'chirildi")
+    except Exception as e:
+        log.error(f"Menu button: {e}")
+
+def make_start_kb(channel_link="", support_link=""):
+    """Xabar tagidagi inline tugmalar"""
+    rows = []
+    # WebApp tugmasi
     if WEB_URL and WEB_URL.startswith("https://"):
-        try:
-            await bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(
-                    text="🛍 Gift Market",
-                    web_app=WebAppInfo(url=WEB_URL)
-                )
-            )
-            log.info("✅ Menu button o'rnatildi")
-        except Exception as e:
-            log.error(f"Menu button: {e}")
+        rows.append([InlineKeyboardButton(
+            text="🛍 Gift Market ni ochish",
+            web_app=WebAppInfo(url=WEB_URL)
+        )])
+    # Kanal va Support
+    row = []
+    if channel_link: row.append(InlineKeyboardButton(text="📢 Kanal", url=channel_link))
+    if support_link: row.append(InlineKeyboardButton(text="💬 Support", url=support_link))
+    if row: rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 # ─── START ───
 @dp.message(Command("start"))
@@ -96,7 +109,8 @@ async def cmd_start(msg: types.Message, state: FSMContext):
     d = db(); uid = str(msg.from_user.id)
 
     if not d["settings"]["bot_active"] and not is_admin(msg.from_user.id):
-        await msg.answer("🔧 Bot hozirda o'chirilgan."); return
+        await msg.answer("🔧 Bot hozirda o'chirilgan.")
+        return
 
     if uid not in d["users"]:
         d["users"][uid] = {
@@ -123,11 +137,13 @@ async def cmd_start(msg: types.Message, state: FSMContext):
 
     d = db()
     if d["users"][uid].get("banned"):
-        await msg.answer("🚫 Bloklangansiz."); return
+        await msg.answer("🚫 Bloklangansiz.")
+        return
 
     args = msg.text.split()
     if len(args) > 1 and args[1] == "admin" and is_admin(msg.from_user.id):
-        await cmd_admin(msg, state); return
+        await cmd_admin(msg, state)
+        return
 
     if not await check_sub(msg.from_user.id):
         chs = d["settings"]["required_channels"]
@@ -138,31 +154,19 @@ async def cmd_start(msg: types.Message, state: FSMContext):
                         reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
         return
 
-    bal  = d["users"][uid].get("balance", 0)
-    logo = d["settings"].get("logo_file_id")
-
-    # Inline tugmalar
-    btns = []
-    if WEB_URL and WEB_URL.startswith("https://"):
-        btns.append([InlineKeyboardButton(
-            text="🛍 Gift Market ni ochish",
-            web_app=WebAppInfo(url=WEB_URL)
-        )])
-    row = []
+    bal     = d["users"][uid].get("balance", 0)
+    logo    = d["settings"].get("logo_file_id")
     channel = d["settings"].get("channel_link", "")
     support = d["settings"].get("support_link", "")
-    if channel: row.append(InlineKeyboardButton(text="📢 Kanal", url=channel))
-    if support: row.append(InlineKeyboardButton(text="💬 Support", url=support))
-    if row: btns.append(row)
 
     text = (
         f"👋 <b>Salom, {msg.from_user.first_name}!</b>\n\n"
         f"⭐ <b>U-Gift Market</b>\n\n"
         f"💰 Balans: <b>{fmt(bal)} so'm</b>\n\n"
-        f"👇 <b>Gift Market</b> tugmasini bosing:"
+        f"👇 Quyidagi tugmani bosib marketga kiring:"
     )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=btns) if btns else None
+    kb = make_start_kb(channel, support)
 
     if logo:
         await msg.answer_photo(logo, caption=text, parse_mode="HTML", reply_markup=kb)
@@ -196,7 +200,6 @@ async def on_webapp(msg: types.Message):
         promo    = data.get("promo", "").upper().strip()
         bal      = d["users"].get(uid, {}).get("balance", 0)
 
-        # Promo ishlatildi
         if promo and promo in d.get("promo_codes", {}):
             pc = d["promo_codes"][promo]
             if promo not in d["users"].get(uid, {}).get("promo_used", []):
@@ -206,14 +209,10 @@ async def on_webapp(msg: types.Message):
 
         if not username:
             await msg.answer("❌ Username kiritilmagan!"); return
-
         if bal < price:
             await msg.answer(
-                f"❌ <b>Balans yetarli emas!</b>\n\n"
-                f"Kerak: <b>{fmt(price)} so'm</b>\n"
-                f"Sizda: <b>{fmt(bal)} so'm</b>",
-                parse_mode="HTML")
-            return
+                f"❌ <b>Balans yetarli emas!</b>\n\nKerak: <b>{fmt(price)} so'm</b>\nSizda: <b>{fmt(bal)} so'm</b>",
+                parse_mode="HTML"); return
 
         proc    = await msg.answer("⏳ <b>Bajarilmoqda...</b>", parse_mode="HTML")
         svc_txt = f"⭐ Premium {months} oy" if service == "premium" else f"🌟 {fmt(stars or 0)} Stars"
@@ -242,8 +241,7 @@ async def on_webapp(msg: types.Message):
                 if o["id"] == order["id"]: o["status"] = "completed"
             sdb(d)
             await proc.edit_text(
-                f"🎉 <b>Muvaffaqiyatli yuborildi!</b>\n\n"
-                f"🛍 {svc_txt}\n👤 @{username}\n💰 {fmt(price)} so'm\n\n✨ Rahmat!",
+                f"🎉 <b>Muvaffaqiyatli yuborildi!</b>\n\n🛍 {svc_txt}\n👤 @{username}\n💰 {fmt(price)} so'm\n\n✨ Rahmat!",
                 parse_mode="HTML")
             await send_log(f"✅ #{order['id']} | {svc_txt} → @{username} | {fmt(price)} so'm")
         else:
@@ -256,16 +254,14 @@ async def on_webapp(msg: types.Message):
 
     except Exception as e:
         log.error(f"WebApp: {e}")
-        await msg.answer("❌ Xato yuz berdi. Qayta urinib ko'ring.")
+        await msg.answer("❌ Xato yuz berdi.")
 
 async def do_fragment(order):
     try:
         from FragmentAPI import SyncFragmentAPI
         api = SyncFragmentAPI(cookies=FRAGMENT_COOKIES, wallet_api_key=TON_API_KEY)
-        if order["service"] == "premium":
-            r = api.gift_premium(order["username"], order["months"])
-        elif order["service"] == "stars":
-            r = api.buy_stars(order["username"], order["stars"])
+        if order["service"] == "premium": r = api.gift_premium(order["username"], order["months"])
+        elif order["service"] == "stars": r = api.buy_stars(order["username"], order["stars"])
         else: return False
         return bool(r)
     except Exception as e:
@@ -300,9 +296,9 @@ async def adm_text():
         f"<code>━━━━━━━━━━━━━━━━</code>\n"
         f"💰 <b>Narxlar:</b>\n"
         f"🪙 1 Stars = <b>{fmt(p['star'])} so'm</b>\n"
-        f"👑 Premium 3oy = <b>{fmt(p['pm3'])} so'm</b>\n"
-        f"👑 Premium 6oy = <b>{fmt(p['pm6'])} so'm</b>\n"
-        f"💎 Premium 12oy = <b>{fmt(p['pm12'])} so'm</b>\n"
+        f"👑 3oy = <b>{fmt(p['pm3'])} so'm</b>\n"
+        f"👑 6oy = <b>{fmt(p['pm6'])} so'm</b>\n"
+        f"💎 12oy = <b>{fmt(p['pm12'])} so'm</b>\n"
         f"<code>━━━━━━━━━━━━━━━━</code>\n"
         f"👥 Foydalanuvchilar: <b>{len(d['users'])}</b>\n"
         f"✅ Bajarilgan: <b>{done}</b>\n"
@@ -311,9 +307,7 @@ async def adm_text():
     )
 
 def back_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")]])
 
 @dp.message(Command("admin"))
 async def cmd_admin(msg: types.Message, state: FSMContext):
@@ -332,8 +326,8 @@ async def cb_adm_main(cb: types.CallbackQuery, state: FSMContext):
 async def cb_stats(cb: types.CallbackQuery):
     if not is_admin(cb.from_user.id): return
     d = db(); today = datetime.now().date().isoformat()
-    t_rev = sum(o["price"] for o in d["orders"] if o["status"] == "completed" and o["created_at"][:10] == today)
-    total_rev = sum(o["price"] for o in d["orders"] if o["status"] == "completed")
+    t_rev = sum(o["price"] for o in d["orders"] if o["status"]=="completed" and o["created_at"][:10]==today)
+    total_rev = sum(o["price"] for o in d["orders"] if o["status"]=="completed")
     await cb.message.edit_text(
         f"📊 <b>Statistika</b>\n\n"
         f"👥 Foydalanuvchilar: <b>{len(d['users'])}</b>\n"
@@ -354,8 +348,7 @@ async def cb_users(cb: types.CallbackQuery):
         [InlineKeyboardButton(text="🔙 Orqaga",        callback_data="adm_main")],
     ])
     await cb.message.edit_text(
-        f"👥 Jami: <b>{len(d['users'])}</b>\n"
-        f"Banlangan: <b>{len([u for u in d['users'].values() if u.get('banned')])}</b>",
+        f"👥 Jami: <b>{len(d['users'])}</b>\nBanlangan: <b>{len([u for u in d['users'].values() if u.get('banned')])}</b>",
         parse_mode="HTML", reply_markup=kb)
 
 @dp.callback_query(F.data.in_({"adm_ban","adm_unban","adm_give_bal"}))
@@ -363,11 +356,10 @@ async def cb_ban_act(cb: types.CallbackQuery, state: FSMContext):
     labels = {
         "adm_ban"     : "🚫 Bloklash — ID kiriting:",
         "adm_unban"   : "✅ Ochish — ID kiriting:",
-        "adm_give_bal": "💰 Balans berish — ID SUMMA kiriting:\n<i>Masalan: 123456789 50000</i>"
+        "adm_give_bal": "💰 ID va SUMMA kiriting:\n<i>Masalan: 123456789 50000</i>"
     }
     await cb.message.edit_text(labels[cb.data], parse_mode="HTML")
-    await state.update_data(ban_action=cb.data)
-    await state.set_state(A.ban_id)
+    await state.update_data(ban_action=cb.data); await state.set_state(A.ban_id)
 
 @dp.message(A.ban_id)
 async def enter_ban(msg: types.Message, state: FSMContext):
@@ -375,16 +367,11 @@ async def enter_ban(msg: types.Message, state: FSMContext):
         parts = msg.text.strip().split(); uid = str(int(parts[0]))
         data = await state.get_data(); d = db(); action = data.get("ban_action")
         if uid not in d["users"]: await msg.answer("❌ Topilmadi!"); await state.clear(); return
-        if action == "adm_ban":
-            d["users"][uid]["banned"] = True; sdb(d)
-            await msg.answer(f"🚫 Bloklandi: <code>{uid}</code>", parse_mode="HTML")
-        elif action == "adm_unban":
-            d["users"][uid]["banned"] = False; sdb(d)
-            await msg.answer(f"✅ Ochildi: <code>{uid}</code>", parse_mode="HTML")
+        if action == "adm_ban": d["users"][uid]["banned"]=True; sdb(d); await msg.answer(f"🚫 Bloklandi: <code>{uid}</code>", parse_mode="HTML")
+        elif action == "adm_unban": d["users"][uid]["banned"]=False; sdb(d); await msg.answer(f"✅ Ochildi: <code>{uid}</code>", parse_mode="HTML")
         elif action == "adm_give_bal":
             if len(parts) < 2: await msg.answer("❌ Format: ID SUMMA"); return
-            amt = int(parts[1])
-            d["users"][uid]["balance"] = d["users"][uid].get("balance", 0) + amt; sdb(d)
+            amt = int(parts[1]); d["users"][uid]["balance"] = d["users"][uid].get("balance",0) + amt; sdb(d)
             try: await bot.send_message(int(uid), f"✅ <b>+{fmt(amt)} so'm</b> qo'shildi!", parse_mode="HTML")
             except: pass
             await msg.answer(f"✅ {fmt(amt)} so'm berildi!", parse_mode="HTML")
@@ -402,14 +389,12 @@ async def cb_prices(cb: types.CallbackQuery):
         [InlineKeyboardButton(text=f"💎 12oy: {fmt(p['pm12'])} so'm",    callback_data="adm_p_pm12")],
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="adm_main")],
     ])
-    await cb.message.edit_text(
-        "💰 <b>Narxlar</b>\n\n<i>O'zgartirsangiz React app da ham o'zgaradi ✅</i>",
-        parse_mode="HTML", reply_markup=kb)
+    await cb.message.edit_text("💰 <b>Narxlar</b>\n\n<i>O'zgartirsangiz app da ham o'zgaradi ✅</i>", parse_mode="HTML", reply_markup=kb)
 
 @dp.callback_query(F.data.in_({"adm_p_star","adm_p_pm3","adm_p_pm6","adm_p_pm12"}))
 async def cb_set_price(cb: types.CallbackQuery, state: FSMContext):
     if not is_super(cb.from_user.id): return
-    key = cb.data.replace("adm_p_", "")
+    key = cb.data.replace("adm_p_","")
     labels = {"star":"1 Stars","pm3":"Premium 3oy","pm6":"Premium 6oy","pm12":"Premium 12oy"}
     await cb.message.edit_text(f"💰 <b>{labels[key]}</b> yangi narxi (so'mda):", parse_mode="HTML")
     await state.update_data(price_key=key); await state.set_state(A.price_key)
@@ -428,11 +413,8 @@ async def enter_price(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "adm_promos")
 async def cb_promos(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d = db(); promos = d.get("promo_codes", {})
-    pt = "\n".join([
-        f"• <code>{k}</code> — {v['discount']}% | {v.get('product','all')} | {v.get('used',0)}/{v.get('limit','∞')}"
-        for k, v in promos.items()
-    ]) if promos else "Yo'q"
+    d = db(); promos = d.get("promo_codes",{})
+    pt = "\n".join([f"• <code>{k}</code> — {v['discount']}% | {v.get('product','all')} | {v.get('used',0)}/{v.get('limit','∞')}" for k,v in promos.items()]) if promos else "Yo'q"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Yaratish", callback_data="adm_new_promo"),
          InlineKeyboardButton(text="🗑 Tozalash", callback_data="adm_clear_promos")],
@@ -470,7 +452,7 @@ async def enter_promo_disc(msg: types.Message, state: FSMContext):
         v = int(msg.text)
         if v < 1 or v > 90: await msg.answer("❌ 1-90 orasida!"); return
         await state.update_data(promo_disc=v)
-        await msg.answer("🔢 Necha kishi uchun? (0 = cheksiz):")
+        await msg.answer("🔢 Necha kishi? (0=cheksiz):")
         await state.set_state(A.promo_limit)
     except: await msg.answer("❌ Faqat raqam!")
 
@@ -481,16 +463,14 @@ async def enter_promo_limit(msg: types.Message, state: FSMContext):
         prods = {"all":"Hammasi","star":"Stars","pm3":"P3oy","pm6":"P6oy","pm12":"P12oy"}
         d["promo_codes"][data["promo_code"]] = {
             "discount"  : data["promo_disc"],
-            "product"   : data.get("promo_product", "all"),
+            "product"   : data.get("promo_product","all"),
             "limit"     : limit if limit > 0 else None,
             "used"      : 0,
             "created_at": datetime.now().isoformat()
         }; sdb(d)
         await msg.answer(
-            f"✅ <b>Promo yaratildi!</b>\n\n"
-            f"🎁 <code>{data['promo_code']}</code>\n"
-            f"📉 {data['promo_disc']}%\n"
-            f"🛍 {prods.get(data.get('promo_product','all'))}\n"
+            f"✅ <b>Promo yaratildi!</b>\n\n🎁 <code>{data['promo_code']}</code>\n"
+            f"📉 {data['promo_disc']}%\n🛍 {prods.get(data.get('promo_product','all'))}\n"
             f"🔢 {limit if limit > 0 else 'Cheksiz'}",
             parse_mode="HTML")
         await state.clear(); await cmd_admin(msg, state)
@@ -516,8 +496,7 @@ async def cb_orders(cb: types.CallbackQuery):
 @dp.callback_query(F.data == "adm_broadcast")
 async def cb_broadcast(cb: types.CallbackQuery, state: FSMContext):
     if not is_admin(cb.from_user.id): return
-    await cb.message.edit_text("📢 Xabar yozing:")
-    await state.set_state(A.broadcast)
+    await cb.message.edit_text("📢 Xabar yozing:"); await state.set_state(A.broadcast)
 
 @dp.message(A.broadcast)
 async def enter_broadcast(msg: types.Message, state: FSMContext):
@@ -536,8 +515,7 @@ async def enter_broadcast(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "adm_logo")
 async def cb_logo(cb: types.CallbackQuery, state: FSMContext):
     if not is_super(cb.from_user.id): return
-    await cb.message.edit_text("🖼 Logo rasmini yuboring (512×512 px):")
-    await state.set_state(A.logo)
+    await cb.message.edit_text("🖼 Logo rasmini yuboring:"); await state.set_state(A.logo)
 
 @dp.message(A.logo)
 async def enter_logo(msg: types.Message, state: FSMContext):
@@ -568,8 +546,7 @@ async def cb_set_settings(cb: types.CallbackQuery, state: FSMContext):
         "adm_set_chanlink": ("📣 Kanal linki:", A.channel_link),
     }
     lbl, st = d[cb.data]
-    await cb.message.edit_text(lbl)
-    await state.set_state(st)
+    await cb.message.edit_text(lbl); await state.set_state(st)
 
 @dp.message(A.min_stars)
 async def e_min(msg: types.Message, state: FSMContext):
@@ -584,7 +561,7 @@ async def e_min(msg: types.Message, state: FSMContext):
 @dp.message(A.ref_bonus)
 async def e_ref(msg: types.Message, state: FSMContext):
     try:
-        v = int(msg.text.replace(" ", ""))
+        v = int(msg.text.replace(" ",""))
         d = db(); d["settings"]["referral_bonus"] = v; sdb(d)
         await msg.answer(f"✅ Ref bonus: {fmt(v)} so'm")
         await state.clear(); await cmd_admin(msg, state)
@@ -643,7 +620,7 @@ async def e_logs(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "adm_admins")
 async def cb_admins(cb: types.CallbackQuery):
     if not is_super(cb.from_user.id): return
-    d = db(); admins = d.get("admins", {})
+    d = db(); admins = d.get("admins",{})
     at = "\n".join([f"• <code>{a}</code>" for a in admins]) if admins else "Yo'q"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Qo'shish",  callback_data="adm_add_admin"),
@@ -654,7 +631,7 @@ async def cb_admins(cb: types.CallbackQuery):
 
 @dp.callback_query(F.data.in_({"adm_add_admin","adm_del_admin"}))
 async def manage_admin(cb: types.CallbackQuery, state: FSMContext):
-    action = "qo'shish" if cb.data == "adm_add_admin" else "o'chirish"
+    action = "qo'shish" if cb.data=="adm_add_admin" else "o'chirish"
     await cb.message.edit_text(f"👑 Admin ID ({action}):")
     await state.update_data(admin_action=cb.data); await state.set_state(A.admin_id)
 
@@ -682,10 +659,10 @@ async def toggle_bot(cb: types.CallbackQuery, state: FSMContext):
 
 # ─── MAIN ───
 async def main():
-    log.info("🚀 U-Gift Bot (React versiya) ishga tushmoqda...")
-    log.info(f"📁 Database: {DB}")
+    log.info("🚀 U-Gift Bot ishga tushmoqda...")
+    log.info(f"📁 DB: {DB}")
     log.info(f"🌐 WEB_URL: {WEB_URL}")
-    await set_menu_button()
+    await remove_menu_button()
     await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
