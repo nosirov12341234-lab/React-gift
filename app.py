@@ -1,9 +1,10 @@
 """
 U-Gift Flask Server - Final versiya
-FragmentAPI - hash bilan
+Fragment API - hash apiUrl dan olinadi
 """
 import json, os, asyncio, secrets
 import requests as req
+import re
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
@@ -20,10 +21,14 @@ FRAGMENT_COOKIES = os.getenv("FRAGMENT_COOKIES", "")
 WALLET_MNEMONIC  = os.getenv("WALLET_MNEMONIC", "")
 TON_API_KEY      = os.getenv("TON_API_KEY", "")
 
+_cached_hash = None
+
 def get_fragment_hash():
-    """Fragment.com dan hash avtomatik olish"""
+    """Fragment.com dan hash avtomatik olish - apiUrl dan"""
+    global _cached_hash
+    if _cached_hash:
+        return _cached_hash
     try:
-        import re
         s = req.Session()
         for c in FRAGMENT_COOKIES.split(';'):
             c = c.strip()
@@ -32,14 +37,16 @@ def get_fragment_hash():
                 s.cookies.set(k.strip(), v.strip(), domain='fragment.com')
         s.headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36'
         r = s.get('https://fragment.com/', timeout=15)
-        patterns = [r'"hash":"([^"]+)"', r"'hash':'([^']+)'", r'hash=([a-f0-9]{10,})']
-        for p in patterns:
-            m = re.search(p, r.text)
-            if m:
-                return m.group(1)
+        m = re.search(r'apiUrl.*?hash=([a-f0-9]+)', r.text)
+        if m:
+            _cached_hash = m.group(1)
+            print(f"[Fragment hash]: {_cached_hash}")
+            return _cached_hash
     except Exception as e:
         print(f"[Hash xato]: {e}")
-    return os.getenv("FRAGMENT_HASH", "")
+    fallback = os.getenv("FRAGMENT_HASH", "")
+    print(f"[Fragment hash fallback]: {fallback}")
+    return fallback
 
 def db():
     if os.path.exists(DB):
@@ -92,13 +99,14 @@ def do_fragment_sync(order):
     try:
         from FragmentAPI import SyncFragmentAPI
         hash_val = get_fragment_hash()
-        print(f"[Fragment hash]: {hash_val[:20] if hash_val else 'Topilmadi'}")
+        if not hash_val:
+            print("[Fragment]: Hash topilmadi!")
+            return False
         api = SyncFragmentAPI(
-            cookies       = FRAGMENT_COOKIES,
-            hash_value    = hash_val,
-            wallet_mnemonic = WALLET_MNEMONIC,
-            wallet_api_key  = TON_API_KEY,
-            
+            cookies        = FRAGMENT_COOKIES,
+            hash_value     = hash_val,
+            wallet_mnemonic= WALLET_MNEMONIC,
+            wallet_api_key = TON_API_KEY,
         )
         if order["service"] == "stars":
             r = api.buy_stars(order["username"], order["stars"])
@@ -112,6 +120,9 @@ def do_fragment_sync(order):
         return bool(r)
     except Exception as e:
         print(f"[Fragment xato]: {e}")
+        # Hash eskirgan bo'lsa — yangilash
+        global _cached_hash
+        _cached_hash = None
         return False
 
 def process_order(uid, service, username, price, stars=None, months=None, promo="", source="app"):
