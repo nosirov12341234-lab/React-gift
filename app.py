@@ -1,7 +1,8 @@
 """
-U-Gift Flask Server - Final
+U-Gift Flask Server - Final versiya
+Fragment API - faqat Cookie bilan (hash kerak emas)
 """
-import json, os, asyncio, secrets
+import json, os, asyncio, secrets, requests as req, re
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
@@ -14,8 +15,91 @@ DB               = os.path.join(os.path.expanduser("~"), "ugift-react", "databas
 QULAYPAY_KEY     = os.getenv("QULAYPAY_API_KEY", "")
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
 SUPER_ADMIN_ID   = int(os.getenv("ADMIN_ID", "0"))
-TON_API_KEY      = os.getenv("TON_API_KEY", "")
 FRAGMENT_COOKIES = os.getenv("FRAGMENT_COOKIES", "")
+
+# ─── FRAGMENT CLIENT ───
+class FragmentClient:
+    BASE = "https://fragment.com"
+
+    def __init__(self, cookies_str: str):
+        self.s = req.Session()
+        for c in cookies_str.split(";"):
+            c = c.strip()
+            if "=" in c:
+                k, v = c.split("=", 1)
+                self.s.cookies.set(k.strip(), v.strip(), domain="fragment.com")
+        self.s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0",
+            "Referer"   : "https://fragment.com/",
+            "Origin"    : "https://fragment.com",
+        })
+        self._hash = None
+
+    def _get_hash(self):
+        if self._hash: return self._hash
+        try:
+            r = self.s.get(self.BASE + "/", timeout=15)
+            for pattern in [r'"hash":"([^"]+)"', r"'hash':'([^']+)'", r'hash=([a-f0-9]{16,})']:
+                m = re.search(pattern, r.text)
+                if m:
+                    self._hash = m.group(1)
+                    return self._hash
+        except Exception as e:
+            print(f"[Hash]: {e}")
+        return ""
+
+    def _api(self, method: str, params: dict) -> dict:
+        params["hash"] = self._get_hash()
+        try:
+            r = self.s.post(
+                self.BASE + "/api",
+                data={"method": method, **params},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=30
+            )
+            return r.json()
+        except Exception as e:
+            print(f"[Fragment API]: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def buy_stars(self, username: str, quantity: int) -> bool:
+        username = username.lstrip("@")
+        r = self._api("initBuyStarsTx", {
+            "recipient"   : username,
+            "quantity"    : str(quantity),
+            "shows_sender": "0",
+        })
+        print(f"[Stars init]: {r}")
+        if not r.get("ok"): return False
+        tx_id = r.get("tx_id") or r.get("id")
+        if tx_id:
+            r2 = self._api("commitStarsTx", {"tx_id": tx_id})
+            print(f"[Stars commit]: {r2}")
+            return r2.get("ok", False)
+        return False
+
+    def gift_premium(self, username: str, months: int) -> bool:
+        username = username.lstrip("@")
+        r = self._api("initGiftPremiumTx", {
+            "recipient"   : username,
+            "months"      : str(months),
+            "shows_sender": "0",
+        })
+        print(f"[Premium init]: {r}")
+        if not r.get("ok"): return False
+        tx_id = r.get("tx_id") or r.get("id")
+        if tx_id:
+            r2 = self._api("commitPremiumTx", {"tx_id": tx_id})
+            print(f"[Premium commit]: {r2}")
+            return r2.get("ok", False)
+        return False
+
+_fragment = None
+def get_fragment():
+    global _fragment
+    if _fragment is None:
+        _fragment = FragmentClient(FRAGMENT_COOKIES)
+    return _fragment
 
 def db():
     if os.path.exists(DB):
@@ -66,16 +150,15 @@ def run_async(coro):
 
 def do_fragment_sync(order):
     try:
-        from FragmentAPI import SyncFragmentAPI
-        api = SyncFragmentAPI(cookies=FRAGMENT_COOKIES, wallet_api_key=TON_API_KEY)
-        if order["service"] == "premium":
-            r = api.gift_premium(order["username"], order["months"])
-        elif order["service"] == "stars":
-            r = api.buy_stars(order["username"], order["stars"])
-        else: return False
-        return bool(r)
+        frag = get_fragment()
+        if order["service"] == "stars":
+            return frag.buy_stars(order["username"], order["stars"])
+        elif order["service"] == "premium":
+            return frag.gift_premium(order["username"], order["months"])
+        return False
     except Exception as e:
-        print(f"[Fragment]: {e}"); return False
+        print(f"[Fragment]: {e}")
+        return False
 
 def process_order(uid, service, username, price, stars=None, months=None, promo="", source="app"):
     d = db()
@@ -118,11 +201,9 @@ def process_order(uid, service, username, price, stars=None, months=None, promo=
         return False, "Xato yuz berdi. Balans qaytarildi."
 
 def get_api_uid():
-    """Token dan uid olish"""
     token = request.headers.get("X-API-Key", "")
     if not token: return None
-    d = db()
-    kd = d.get("api_keys", {}).get(token)
+    d = db(); kd = d.get("api_keys", {}).get(token)
     if not kd or not kd.get("active"): return None
     d["api_keys"][token]["last_used"] = datetime.now().isoformat()
     d["api_keys"][token]["requests"]  = d["api_keys"][token].get("requests", 0) + 1
@@ -138,7 +219,6 @@ def serve_react(path):
     if path and os.path.exists(full): return send_from_directory(WEBAPP_DIR, path)
     return send_from_directory(WEBAPP_DIR, "index.html")
 
-# ─── API: SETTINGS ───
 @app.route("/api/settings")
 def api_settings():
     uid = request.args.get("uid", "0")
@@ -152,7 +232,6 @@ def api_settings():
         "name": u.get("name",""), "orders_count": len(u.get("orders", [])),
     })
 
-# ─── API: BUY ───
 @app.route("/api/buy", methods=["POST"])
 def api_buy():
     data = request.json or {}
@@ -167,7 +246,6 @@ def api_buy():
     if ok: return jsonify({"success": True, **result})
     return jsonify({"success": False, "error": result})
 
-# ─── API: PROMO ───
 @app.route("/api/promo/check", methods=["POST"])
 def api_promo_check():
     data = request.json or {}
@@ -182,14 +260,12 @@ def api_promo_check():
     if code in d["users"].get(uid,{}).get("promo_used",[]): return jsonify({"success":False,"error":"Allaqachon ishlatgansiz"})
     return jsonify({"success":True,"discount":promo["discount"]})
 
-# ─── API: TOPUP ───
 @app.route("/api/topup/create", methods=["POST"])
 def api_topup_create():
     data = request.json or {}
     uid  = str(data.get("uid","0"))
     amount = int(data.get("amount",0))
     if amount < 5000: return jsonify({"success":False,"error":"Minimum 5 000 so'm"})
-    import requests as req
     try:
         r = req.post(
             "https://api.qulaypay.uz/transaction/create",
@@ -208,14 +284,12 @@ def api_topup_create():
     except Exception as e:
         return jsonify({"success":False,"error":str(e)})
 
-# ─── API: HISTORY ───
 @app.route("/api/history")
 def api_history():
     uid = request.args.get("uid","0"); d = db()
     orders = [o for o in d["orders"] if o["user_id"]==str(uid)][-20:]
     return jsonify({"orders":list(reversed(orders))})
 
-# ─── API: TOP10 ───
 @app.route("/api/top10")
 def api_top10():
     period = request.args.get("period","daily"); d = db()
@@ -237,196 +311,110 @@ def api_top10():
         result.append({"uid":uid_o,"name":u.get("name","Foydalanuvchi"),"stars":stats["stars"],"orders":stats["orders"]})
     return jsonify({"top":result})
 
-# ─── API: REFERRAL ───
 @app.route("/api/referral")
 def api_referral():
     uid = request.args.get("uid","0"); d = db(); u = d["users"].get(str(uid),{})
-    import requests as req
     try:
         me   = req.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe",timeout=5).json()
         link = f"https://t.me/{me['result']['username']}?start=ref_{uid}"
     except: link = ""
-    # Referral ro'yxati
     ref_list = []
     for rid in u.get("referral_list",[]):
         ru = d["users"].get(rid,{})
-        ref_list.append({
-            "uid" : rid,
-            "name": ru.get("name","Foydalanuvchi"),
-            "username": ru.get("username",""),
-            "date": ru.get("joined","")[:10],
-            "orders": len(ru.get("orders",[])),
-        })
-    return jsonify({
-        "link"      : link,
-        "referrals" : u.get("referrals",0),
-        "ref_earned": u.get("ref_earned",0),
-        "bonus"     : d["settings"].get("referral_bonus",5000),
-        "list"      : ref_list,
-    })
+        ref_list.append({"uid":rid,"name":ru.get("name","Foydalanuvchi"),"username":ru.get("username",""),"date":ru.get("joined","")[:10],"orders":len(ru.get("orders",[]))})
+    return jsonify({"link":link,"referrals":u.get("referrals",0),"ref_earned":u.get("ref_earned",0),"bonus":d["settings"].get("referral_bonus",5000),"list":ref_list})
 
-# ══════════════════════════════════
-# DEVELOPER API (/api/v1/*)
-# Har bir so'rovda X-API-Key header
-# Pul token egasining balansidan yechiladi
-# ══════════════════════════════════
-
+# ─── DEVELOPER API ───
 @app.route("/api/v1/balance")
 def v1_balance():
     uid = get_api_uid()
     if not uid: return jsonify({"error":"Noto'g'ri API token"}), 401
     d = db(); u = d["users"].get(str(uid),{})
-    return jsonify({
-        "balance"     : u.get("balance",0),
-        "orders_count": len(u.get("orders",[])),
-        "referrals"   : u.get("referrals",0),
-    })
+    return jsonify({"balance":u.get("balance",0),"orders_count":len(u.get("orders",[])),"referrals":u.get("referrals",0)})
 
 @app.route("/api/v1/stars", methods=["POST"])
 def v1_stars():
-    """Stars sotib olish API orqali"""
     uid = get_api_uid()
     if not uid: return jsonify({"error":"Noto'g'ri API token"}), 401
-    data     = request.json or {}
+    data = request.json or {}
     username = data.get("username","").strip().lstrip("@")
     count    = int(data.get("count",0))
-    d        = db(); s = d["settings"]
-    if count < s.get("min_stars",50):
-        return jsonify({"error":f"Minimum {s.get('min_stars',50)} Stars"}), 400
+    d = db(); s = d["settings"]
+    if count < s.get("min_stars",50): return jsonify({"error":f"Minimum {s.get('min_stars',50)} Stars"}), 400
     price = count * s["prices"]["star"]
-    ok, result = process_order(
-        uid=uid, service="stars", username=username,
-        price=price, stars=count, source="api"
-    )
-    if ok: return jsonify({"success":True, **result})
+    ok, result = process_order(uid=uid,service="stars",username=username,price=price,stars=count,source="api")
+    if ok: return jsonify({"success":True,**result})
     return jsonify({"error":result}), 400
 
 @app.route("/api/v1/premium", methods=["POST"])
 def v1_premium():
-    """Premium sotib olish API orqali"""
     uid = get_api_uid()
     if not uid: return jsonify({"error":"Noto'g'ri API token"}), 401
-    data     = request.json or {}
+    data = request.json or {}
     username = data.get("username","").strip().lstrip("@")
     months   = int(data.get("months",6))
-    if months not in (3,6,12):
-        return jsonify({"error":"months: 3, 6 yoki 12 bo'lishi kerak"}), 400
-    d     = db(); s = d["settings"]
+    if months not in (3,6,12): return jsonify({"error":"months: 3, 6 yoki 12"}), 400
+    d = db(); s = d["settings"]
     pkMap = {3:"pm3",6:"pm6",12:"pm12"}
     price = s["prices"][pkMap[months]]
-    ok, result = process_order(
-        uid=uid, service="premium", username=username,
-        price=price, months=months, source="api"
-    )
-    if ok: return jsonify({"success":True, **result})
+    ok, result = process_order(uid=uid,service="premium",username=username,price=price,months=months,source="api")
+    if ok: return jsonify({"success":True,**result})
     return jsonify({"error":result}), 400
 
 @app.route("/api/v1/history")
 def v1_history():
-    """Buyurtmalar tarixi API orqali"""
     uid = get_api_uid()
     if not uid: return jsonify({"error":"Noto'g'ri API token"}), 401
-    d      = db(); page = int(request.args.get("page",1)); limit = 20
+    d = db(); page = int(request.args.get("page",1)); limit = 20
     orders = [o for o in reversed(d["orders"]) if o["user_id"]==str(uid)]
-    start  = (page-1)*limit; end = start+limit
-    return jsonify({"orders":orders[start:end],"total":len(orders),"page":page})
+    start = (page-1)*limit
+    return jsonify({"orders":orders[start:start+limit],"total":len(orders),"page":page})
 
 @app.route("/api/v1/token/create", methods=["POST"])
 def v1_token_create():
-    """Yangi API token yaratish (foydalanuvchi uchun)"""
-    data = request.json or {}
-    uid  = str(data.get("uid","0"))
-    if uid not in db().get("users",{}):
-        return jsonify({"error":"Avval /start bosing"}), 400
-    d     = db(); token = secrets.token_hex(32)
-    # Eski tokenlarni o'chirish
-    old_tokens = [t for t,v in d.get("api_keys",{}).items() if v.get("uid")==uid]
-    for t in old_tokens: del d["api_keys"][t]
-    d.setdefault("api_keys",{})[token] = {
-        "uid": uid, "created_at": datetime.now().isoformat(),
-        "active": True, "requests": 0, "last_used": None
-    }
+    data = request.json or {}; uid = str(data.get("uid","0"))
+    if uid not in db().get("users",{}): return jsonify({"error":"Avval /start bosing"}), 400
+    d = db(); token = secrets.token_hex(32)
+    old = [t for t,v in d.get("api_keys",{}).items() if v.get("uid")==uid]
+    for t in old: del d["api_keys"][t]
+    d.setdefault("api_keys",{})[token] = {"uid":uid,"created_at":datetime.now().isoformat(),"active":True,"requests":0,"last_used":None}
     sdb(d)
-    return jsonify({
-        "success" : True,
-        "token"   : token,
-        "message" : "Token yaratildi! X-API-Key headerida yuboring",
-        "docs_url": "/api/v1/docs",
-    })
+    return jsonify({"success":True,"token":token,"docs_url":"/api/v1/docs"})
 
 @app.route("/api/v1/token/info")
 def v1_token_info():
-    """Token ma'lumotlari"""
     uid = get_api_uid()
     if not uid: return jsonify({"error":"Noto'g'ri API token"}), 401
     token = request.headers.get("X-API-Key","")
     d = db(); kd = d["api_keys"][token]
-    return jsonify({
-        "uid"       : uid,
-        "created_at": kd.get("created_at",""),
-        "requests"  : kd.get("requests",0),
-        "last_used" : kd.get("last_used",""),
-        "active"    : kd.get("active",True),
-    })
+    return jsonify({"uid":uid,"created_at":kd.get("created_at",""),"requests":kd.get("requests",0),"last_used":kd.get("last_used","")})
 
 @app.route("/api/v1/token/refresh", methods=["POST"])
 def v1_token_refresh():
-    """Tokenni yangilash"""
     uid = get_api_uid()
     if not uid: return jsonify({"error":"Noto'g'ri API token"}), 401
-    old_token = request.headers.get("X-API-Key","")
+    old = request.headers.get("X-API-Key","")
     d = db(); new_token = secrets.token_hex(32)
-    del d["api_keys"][old_token]
-    d["api_keys"][new_token] = {
-        "uid": uid, "created_at": datetime.now().isoformat(),
-        "active": True, "requests": 0, "last_used": None
-    }
-    sdb(d)
-    return jsonify({"success":True,"token":new_token})
+    del d["api_keys"][old]
+    d["api_keys"][new_token] = {"uid":uid,"created_at":datetime.now().isoformat(),"active":True,"requests":0,"last_used":None}
+    sdb(d); return jsonify({"success":True,"token":new_token})
 
 @app.route("/api/v1/docs")
 def v1_docs():
-    """Developer API hujjati"""
     base = request.host_url.rstrip("/")
     return jsonify({
-        "name"   : "U-Gift Developer API v1",
-        "version": "1.0",
-        "base"   : base,
-        "auth"   : {
-            "type"  : "API Key",
-            "header": "X-API-Key: YOUR_TOKEN",
-            "note"  : "Token yaratish: POST /api/v1/token/create {uid: YOUR_TELEGRAM_ID}"
-        },
-        "billing": "API orqali xarid qilsangiz, Telegram hisobingiz balansidan yechiladi",
-        "endpoints": {
-            "Token": {
-                "POST /api/v1/token/create" : "Yangi token yaratish (uid kerak)",
-                "GET  /api/v1/token/info"   : "Token ma'lumotlari",
-                "POST /api/v1/token/refresh": "Tokenni yangilash",
-            },
-            "Hisob": {
-                "GET /api/v1/balance": "Balans va statistika",
-                "GET /api/v1/history": "Buyurtmalar tarixi (?page=1)",
-            },
-            "Xarid": {
-                "POST /api/v1/stars"  : "Stars sotib olish {username, count}",
-                "POST /api/v1/premium": "Premium sovg'a {username, months: 3|6|12}",
-            }
+        "name":"U-Gift Developer API v1","version":"1.0","base":base,
+        "auth":{"type":"API Key","header":"X-API-Key: YOUR_TOKEN","note":"Token: POST /api/v1/token/create {uid: YOUR_ID}"},
+        "billing":"API orqali xarid balansdan yechiladi",
+        "endpoints":{
+            "Token":{"POST /api/v1/token/create":"Yangi token","GET /api/v1/token/info":"Token info","POST /api/v1/token/refresh":"Yangilash"},
+            "Hisob":{"GET /api/v1/balance":"Balans","GET /api/v1/history":"Tarix"},
+            "Xarid":{"POST /api/v1/stars":"{username,count}","POST /api/v1/premium":"{username,months:3|6|12}"},
         },
         "prices": db()["settings"]["prices"],
-        "examples": {
-            "token_create": f'curl -X POST {base}/api/v1/token/create -H "Content-Type: application/json" -d \'{{"uid":"YOUR_ID"}}\'',
-            "buy_stars"   : f'curl -X POST {base}/api/v1/stars -H "X-API-Key: TOKEN" -H "Content-Type: application/json" -d \'{{"username":"friend","count":100}}\'',
-            "buy_premium" : f'curl -X POST {base}/api/v1/premium -H "X-API-Key: TOKEN" -H "Content-Type: application/json" -d \'{{"username":"friend","months":6}}\'',
-            "balance"     : f'curl {base}/api/v1/balance -H "X-API-Key: TOKEN"',
-        }
     })
 
-# ══════════════════════════════════
-# ADMIN API (/api/dev/*)
-# Faqat adminlar uchun
-# ══════════════════════════════════
-
+# ─── ADMIN API ───
 def check_admin_token():
     token = request.headers.get("X-API-Key","")
     d = db(); kd = d.get("api_keys",{}).get(token,{})
@@ -439,8 +427,7 @@ def api_dev_token():
     if not is_admin(uid): return jsonify({"error":"Ruxsat yo'q"}), 403
     d = db(); token = secrets.token_hex(32)
     d.setdefault("api_keys",{})[token] = {"uid":uid,"created_at":datetime.now().isoformat(),"active":True,"requests":0}
-    sdb(d)
-    return jsonify({"success":True,"token":token})
+    sdb(d); return jsonify({"success":True,"token":token})
 
 @app.route("/api/dev/stats")
 def api_dev_stats():
@@ -448,16 +435,7 @@ def api_dev_stats():
     d = db(); today = datetime.now().date().isoformat()
     done = [o for o in d["orders"] if o["status"]=="completed"]
     t_ord = [o for o in done if o["created_at"][:10]==today]
-    return jsonify({
-        "users": len(d["users"]),
-        "orders_total": len(d["orders"]),
-        "orders_done": len(done),
-        "orders_failed": len([o for o in d["orders"] if o["status"]=="failed"]),
-        "revenue_total": sum(o["price"] for o in done),
-        "revenue_today": sum(o["price"] for o in t_ord),
-        "orders_today": len(t_ord),
-        "prices": d["settings"]["prices"],
-    })
+    return jsonify({"users":len(d["users"]),"orders_total":len(d["orders"]),"orders_done":len(done),"orders_failed":len([o for o in d["orders"] if o["status"]=="failed"]),"revenue_total":sum(o["price"] for o in done),"revenue_today":sum(o["price"] for o in t_ord),"orders_today":len(t_ord),"prices":d["settings"]["prices"]})
 
 @app.route("/api/dev/users")
 def api_dev_users():
@@ -473,8 +451,8 @@ def api_dev_orders():
     if not check_admin_token(): return jsonify({"error":"Ruxsat yo'q"}), 401
     d = db(); page = int(request.args.get("page",1)); limit = 20
     orders = list(reversed(d["orders"])); total = len(orders)
-    start = (page-1)*limit; end = start+limit
-    return jsonify({"orders":orders[start:end],"total":total,"page":page})
+    start = (page-1)*limit
+    return jsonify({"orders":orders[start:start+limit],"total":total,"page":page})
 
 @app.route("/api/dev/prices", methods=["POST"])
 def api_dev_prices():
@@ -483,8 +461,7 @@ def api_dev_prices():
     for key in ["star","pm3","pm6","pm12"]:
         if key in data and isinstance(data[key],int) and data[key] > 0:
             d["settings"]["prices"][key] = data[key]
-    sdb(d)
-    return jsonify({"success":True,"prices":d["settings"]["prices"]})
+    sdb(d); return jsonify({"success":True,"prices":d["settings"]["prices"]})
 
 # ─── QULAYPAY WEBHOOK ───
 @app.route("/webhook/qulaypay", methods=["POST"])
