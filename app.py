@@ -436,7 +436,68 @@ def qulaypay_webhook():
         run_async(send_tg(int(uid), f"✅ <b>Balansingiz to'ldirildi!</b>\n\n➕ <b>+{fmt(amt)} so'm</b>\n💰 Joriy: <b>{fmt(d['users'][uid]['balance'])} so'm</b>"))
     return jsonify({"status":"ok"})
 
+
+@app.route("/api/topup/card", methods=["POST"])
+def api_topup_card():
+    import secrets as sec
+    data   = request.json or {}
+    uid    = str(data.get("uid", "0"))
+    amount = int(data.get("amount", 0))
+    if amount < 5000:
+        return jsonify({"success": False, "error": "Minimum 5 000 so'm"})
+    d = db()
+    if uid not in d["users"]:
+        return jsonify({"success": False, "error": "Foydalanuvchi topilmadi"})
+    
+    card   = d["settings"].get("card_number", "")
+    holder = d["settings"].get("card_holder", "")
+    wait   = d["settings"].get("card_wait_minutes", 5)
+    
+    if not card:
+        return jsonify({"success": False, "error": "Karta sozlanmagan"})
+    
+    # Unikal summa
+    now = datetime.now()
+    active = set()
+    for t in d.get("pending_topups", {}).values():
+        if t.get("method") != "card": continue
+        exp = t.get("expires", "")
+        try:
+            if datetime.fromisoformat(exp) > now:
+                active.add(t.get("unique_amount", 0))
+        except: pass
+    
+    unique = amount
+    for extra in range(10):
+        if amount + extra not in active:
+            unique = amount + extra
+            break
+    
+    txn_id  = sec.token_hex(8)
+    expires = (now + __import__('datetime').timedelta(minutes=wait)).isoformat()
+    d.setdefault("pending_topups", {})[txn_id] = {
+        "uid"          : uid,
+        "amount"       : amount,
+        "unique_amount": unique,
+        "method"       : "card",
+        "expires"      : expires,
+        "created_at"   : now.isoformat(),
+    }
+    sdb(d)
+    
+    return jsonify({
+        "success"     : True,
+        "card"        : card,
+        "holder"      : holder,
+        "unique_amount": unique,
+        "wait_minutes" : wait,
+        "txn_id"      : txn_id,
+    })
+
 if __name__ == "__main__":
     print(f"✅ Webapp: {WEBAPP_DIR}")
     print(f"✅ DB: {DB}")
     app.run(host="0.0.0.0", port=5000, debug=False)
+
+# ─── API: KARTA TOPUP ───
+# Bu qatorni app.py ning oxirida if __name__ dan OLDIN qo'shing
